@@ -30,6 +30,8 @@ Some rules for simplicity:
   for them because we KNOW what we will DO to them when we find them
 - order matters: list patterns specific before generic, optimistic before
   pessimistic etc, as they will be checked in the given order
+- all copies of the software must run the same version of the dictionaries
+
 Maximum 127 records in this category
 """
 PATTERNS = [
@@ -86,6 +88,7 @@ scenarios to create derivative UIDs for related, but distinct events, such
 as alerts, chat messages etc. They are a separate category to UID patterns,
 and are uncorrelated - any modifier can apply to any primary UID irrespective
 of the UID pattern.
+
 Maximum 63 records in this category
 """
 MODIFIERS = [
@@ -99,9 +102,9 @@ MODIFIERS = [
     {'name': 'sig_chk',     'prefix': 'SigCheck.', 'suffix': ''},
 ]
 
-count_p = {}
-count_m = {}
-count_l = 0
+count_p = {}    # pattern match counters
+count_m = {}    # modifier match counters
+count_l = 0     # literal (no match) counter
 
 
 def base36(number, alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
@@ -351,6 +354,9 @@ def uid_codec(uid, patname, encode=True):
 
 
 def uid_encode(uid):
+    """
+    All-inclusive function for encoding a UID to compressed bytes
+    """
     global count_l
 
     # First, check for modifiers
@@ -390,7 +396,15 @@ def uid_encode(uid):
 
     newlen += len(e)
 
-    # Encode pattern ID and (optional) modifier ID
+    """
+    Encoding of pattern ID and (optional) modifier ID:
+    - first byte:
+      - bit 0-6: pattern ID 0-127 (0=literal)
+      - bit 7(MSB), if set, means next byte (modifier ID) is present
+    - second byte (see above):
+      - bit 0-4: modifier ID 0-63 (0=reserved)
+      - bit 5-7: RESERVED
+    """
     if mod_id:
         e_how = pack('BB', pat_id | 0x80, mod_id & 0x3f)
     else:
@@ -400,8 +414,11 @@ def uid_encode(uid):
 
 
 def uid_decode(enc):
+    """
+    All-inclusive function for decoding a UID from compressed bytes
+    """
 
-    # First 1-2 bytes encode compression details
+    # First 1-2 bytes encode compression details (see above)
     (pat_id, mod_id) = unpack('BB', enc[:2])
 
     if (pat_id & 0x80):  # mod indicator bit
@@ -426,55 +443,66 @@ def uid_decode(enc):
     return uid
 
 
-tot_len = 0
-tot_enc = 0
+if __name__ == '__main__':
+    """
+    Read UIDs on STDIN, one per line, and attempt to classify and
+    compress them. Finish at End-of-File (or Ctrl-D)
+
+    At the end, output:
+    - a CSV list of item counters per pattern, for distribution stats, and
+    - grand totals of bytes in/out to estimate the median compression ratio
+    """
+
+    # Some counters
+    tot_len = 0
+    tot_enc = 0
+
+    while True:
+
+        # read line in non-blocking mode
+        if sys.stdin in select([sys.stdin], [], [], 0)[0]:
+
+            l = sys.stdin.readline()
+            if not l:
+                break
+
+            l = l.rstrip()
+            print('UID=' + l)
+
+            # Perform encoding using all-inclusive function
+            enc = uid_encode(l)
+            print('ENC=' + hexlify(enc).decode())
+
+            # Verify conversion by decoding and comparing to original
+            v = uid_decode(enc)
+
+            if (v != l):
+                print('ERR:' + v)
+            else:
+                print('SUCCESS %d->%d' % (len(l), len(enc)))
+
+            print('')
+
+            tot_len += len(l)
+            tot_enc += len(enc)
 
 
-while True:
-    # read line in non-blocking mode
-    if sys.stdin in select([sys.stdin], [], [], 0)[0]:
+    """
+    Print pattern match counters
+    """
 
-        l = sys.stdin.readline()
-        if not l:
-            break
+    print ('MODIFIERS')
+    for id in range(len(MODIFIERS)):
+        modname = MODIFIERS[id]['name']
+        if modname in count_m:
+            print("%s,%d" % (modname, count_m[modname]))
 
-        l = l.rstrip()
-        print('UID=' + l)
+    print ('PATTERNS')
+    for id in range(len(PATTERNS)):
+        patname = PATTERNS[id]['name']
+        if patname in count_p:
+            print("%s,%d" % (patname, count_p[patname]))
 
-        # Perform encoding using all-inclusive function
-        enc = uid_encode(l)
-        print('ENC=' + hexlify(enc).decode())
+    print('LITERAL,%d' % count_l)
 
-        # Verify conversion by decoding and comparing to original
-        v = uid_decode(enc)
-
-        if (v != l):
-            print('ERR:' + v)
-        else:
-            print('SUCCESS %d->%d' % (len(l), len(enc)))
-
-        print('')
-
-        tot_len += len(l)
-        tot_enc += len(enc)
-
-
-"""
-Print pattern match counters
-"""
-
-print ('MODIFIERS')
-for id in range(len(MODIFIERS)):
-    modname = MODIFIERS[id]['name']
-    if modname in count_m:
-        print("%s,%d" % (modname, count_m[modname]))
-
-print ('PATTERNS')
-for id in range(len(PATTERNS)):
-    patname = PATTERNS[id]['name']
-    if patname in count_p:
-        print("%s,%d" % (patname, count_p[patname]))
-
-print('LITERAL,%d' % count_l)
-
-print ('TOTAL COMPRESSION: %d->%d' % (tot_len, tot_enc))
+    print('TOTAL COMPRESSION: %d->%d' % (tot_len, tot_enc))
